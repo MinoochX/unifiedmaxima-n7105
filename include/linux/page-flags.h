@@ -6,6 +6,8 @@
 #define PAGE_FLAGS_H
 
 #include <linux/types.h>
+#include <linux/bug.h>
+#include <linux/mmdebug.h>
 #ifndef __GENERATING_BOUNDS_H
 #include <linux/mm_types.h>
 #include <generated/bounds.h>
@@ -124,66 +126,15 @@ enum pageflags {
 
 	/* SLOB */
 	PG_slob_free = PG_private,
-
-	/* SLUB */
-	PG_slub_frozen = PG_active,
 };
 
 #ifndef __GENERATING_BOUNDS_H
 
-#ifdef CONFIG_DMA_CMA
-struct page;
-extern struct page *migrate_pages_current;
-
 /*
  * Macros to create function definitions for page flags
  */
 #define TESTPAGEFLAG(uname, lname)					\
-static inline int Page##uname(struct page *page)			\
-	{ do { } while (0); return test_bit(PG_##lname, &page->flags); }
-
-#define SETPAGEFLAG(uname, lname)					\
-static inline void SetPage##uname(struct page *page)			\
-	{ WARN_ON(0 && page == migrate_pages_current);			\
-		set_bit(PG_##lname, &page->flags); }
-
-#define CLEARPAGEFLAG(uname, lname)					\
-static inline void ClearPage##uname(struct page *page)			\
-	{ WARN_ON(0 && page == migrate_pages_current);			\
-		clear_bit(PG_##lname, &page->flags); }
-
-#define __SETPAGEFLAG(uname, lname)					\
-static inline void __SetPage##uname(struct page *page)			\
-	{ WARN_ON(0 && page == migrate_pages_current);			\
-		 __set_bit(PG_##lname, &page->flags); }
-
-#define __CLEARPAGEFLAG(uname, lname)					\
-static inline void __ClearPage##uname(struct page *page)		\
-	{ WARN_ON(0 && page == migrate_pages_current);			\
-		 __clear_bit(PG_##lname, &page->flags); }
-
-#define TESTSETFLAG(uname, lname)					\
-static inline int TestSetPage##uname(struct page *page)			\
-	{ WARN_ON(0 && page == migrate_pages_current);			\
-		 return test_and_set_bit(PG_##lname, &page->flags); }
-
-#define TESTCLEARFLAG(uname, lname)					\
-static inline int TestClearPage##uname(struct page *page)		\
-	{ WARN_ON(0 && page == migrate_pages_current);			\
-		 return test_and_clear_bit(PG_##lname, &page->flags); }
-
-#define __TESTCLEARFLAG(uname, lname)					\
-static inline int __TestClearPage##uname(struct page *page)		\
-	{ WARN_ON(0 && page == migrate_pages_current);			\
-		 return __test_and_clear_bit(PG_##lname, &page->flags); }
-
-#else
-
-/*
- * Macros to create function definitions for page flags
- */
-#define TESTPAGEFLAG(uname, lname)					\
-static inline int Page##uname(struct page *page) 			\
+static inline int Page##uname(const struct page *page)			\
 			{ return test_bit(PG_##lname, &page->flags); }
 
 #define SETPAGEFLAG(uname, lname)					\
@@ -214,8 +165,6 @@ static inline int TestClearPage##uname(struct page *page)		\
 static inline int __TestClearPage##uname(struct page *page)		\
 		{ return __test_and_clear_bit(PG_##lname, &page->flags); }
 
-#endif
-
 #define PAGEFLAG(uname, lname) TESTPAGEFLAG(uname, lname)		\
 	SETPAGEFLAG(uname, lname) CLEARPAGEFLAG(uname, lname)
 
@@ -223,7 +172,7 @@ static inline int __TestClearPage##uname(struct page *page)		\
 	__SETPAGEFLAG(uname, lname)  __CLEARPAGEFLAG(uname, lname)
 
 #define PAGEFLAG_FALSE(uname) 						\
-static inline int Page##uname(struct page *page) 			\
+static inline int Page##uname(const struct page *page)			\
 			{ return 0; }
 
 #define TESTSCFLAG(uname, lname)					\
@@ -261,8 +210,6 @@ PAGEFLAG(Reserved, reserved) __CLEARPAGEFLAG(Reserved, reserved)
 PAGEFLAG(SwapBacked, swapbacked) __CLEARPAGEFLAG(SwapBacked, swapbacked)
 
 __PAGEFLAG(SlobFree, slob_free)
-
-__PAGEFLAG(SlubFrozen, slub_frozen)
 
 /*
  * Private page markings that may be used by the filesystem that owns the page
@@ -415,7 +362,7 @@ static inline void ClearPageCompound(struct page *page)
  * pages on the LRU and/or pagecache.
  */
 TESTPAGEFLAG(Compound, compound)
-__PAGEFLAG(Head, compound)
+__SETPAGEFLAG(Head, compound)  __CLEARPAGEFLAG(Head, compound)
 
 /*
  * PG_reclaim is used in combination with PG_compound to mark the
@@ -427,7 +374,13 @@ __PAGEFLAG(Head, compound)
  * PG_compound & PG_reclaim	=> Tail page
  * PG_compound & ~PG_reclaim	=> Head page
  */
+#define PG_head_mask ((1L << PG_compound))
 #define PG_head_tail_mask ((1L << PG_compound) | (1L << PG_reclaim))
+
+static inline int PageHead(struct page *page)
+{
+	return ((page->flags & PG_head_tail_mask) == PG_head_mask);
+}
 
 static inline int PageTail(struct page *page)
 {
@@ -469,9 +422,24 @@ static inline int PageTransHuge(struct page *page)
 	return PageHead(page);
 }
 
+/*
+ * PageTransCompound returns true for both transparent huge pages
+ * and hugetlbfs pages, so it should only be called when it's known
+ * that hugetlbfs pages aren't involved.
+ */
 static inline int PageTransCompound(struct page *page)
 {
 	return PageCompound(page);
+}
+
+/*
+ * PageTransTail returns true for both transparent huge pages
+ * and hugetlbfs pages, so it should only be called when it's known
+ * that hugetlbfs pages aren't involved.
+ */
+static inline int PageTransTail(struct page *page)
+{
+	return PageTail(page);
 }
 
 #else
@@ -485,7 +453,40 @@ static inline int PageTransCompound(struct page *page)
 {
 	return 0;
 }
+
+static inline int PageTransTail(struct page *page)
+{
+	return 0;
+}
 #endif
+
+/*
+ * If network-based swap is enabled, sl*b must keep track of whether pages
+ * were allocated from pfmemalloc reserves.
+ */
+static inline int PageSlabPfmemalloc(struct page *page)
+{
+	VM_BUG_ON(!PageSlab(page));
+	return PageActive(page);
+}
+
+static inline void SetPageSlabPfmemalloc(struct page *page)
+{
+	VM_BUG_ON(!PageSlab(page));
+	SetPageActive(page);
+}
+
+static inline void __ClearPageSlabPfmemalloc(struct page *page)
+{
+	VM_BUG_ON(!PageSlab(page));
+	__ClearPageActive(page);
+}
+
+static inline void ClearPageSlabPfmemalloc(struct page *page)
+{
+	VM_BUG_ON(!PageSlab(page));
+	ClearPageActive(page);
+}
 
 #ifdef CONFIG_MMU
 #define __PG_MLOCKED		(1 << PG_mlocked)

@@ -34,7 +34,8 @@
  */
 
 #include <linux/highmem.h>
-#include "drmP.h"
+#include <linux/export.h>
+#include <drm/drmP.h>
 
 #if __OS_HAS_AGP
 static void *agp_remap(unsigned long offset, unsigned long size,

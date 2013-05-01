@@ -24,6 +24,7 @@
  *	Li Peng <peng.li@intel.com>
  */
 
+#include <linux/export.h>
 #include <linux/mutex.h>
 #include <linux/pci.h>
 #include <linux/i2c.h>
@@ -249,7 +250,7 @@ static irqreturn_t oaktrail_hdmi_i2c_handler(int this_irq, void *dev)
  */
 static void oaktrail_hdmi_i2c_gpio_fix(void)
 {
-	void *base;
+	void __iomem *base;
 	unsigned int gpio_base = 0xff12c000;
 	int gpio_len = 0x1000;
 	u32 temp;

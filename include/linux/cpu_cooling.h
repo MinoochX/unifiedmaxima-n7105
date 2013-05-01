@@ -1,8 +1,8 @@
 /*
  *  linux/include/linux/cpu_cooling.h
  *
- *  Copyright (C) 2011	Samsung Electronics Co., Ltd(http://www.samsung.com)
- *  Copyright (C) 2011  Amit Daniel <amit.kachhap at linaro.org>
+ *  Copyright (C) 2012	Samsung Electronics Co., Ltd(http://www.samsung.com)
+ *  Copyright (C) 2012  Amit Daniel <amit.kachhap@linaro.org>
  *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  *  This program is free software; you can redistribute it and/or modify
@@ -26,20 +26,33 @@
 
 #include <linux/thermal.h>
 
-struct freq_pctg_table {
-	unsigned int freq_clip_pctg[NR_CPUS];
-	unsigned int polling_interval;
-};
+#define CPUFREQ_COOLING_START		0
+#define CPUFREQ_COOLING_STOP		1
 
-extern struct thermal_cooling_device *cpufreq_cooling_register(
-	struct freq_pctg_table *tab_ptr, unsigned int tab_size,
-	const struct cpumask *mask_val);
+#if defined(CONFIG_CPU_THERMAL) || defined(CONFIG_CPU_THERMAL_MODULE)
+/**
+ * cpufreq_cooling_register - function to create cpufreq cooling device.
+ * @clip_cpus: cpumask of cpus where the frequency constraints will happen
+ */
+struct thermal_cooling_device *cpufreq_cooling_register(
+		const struct cpumask *clip_cpus);
 
-extern void cpufreq_cooling_unregister(void);
-
-extern struct thermal_cooling_device *cpuhotplug_cooling_register(
-	const struct cpumask *mask_val);
-
-extern void cpuhotplug_cooling_unregister(void);
+/**
+ * cpufreq_cooling_unregister - function to remove cpufreq cooling device.
+ * @cdev: thermal cooling device pointer.
+ */
+void cpufreq_cooling_unregister(struct thermal_cooling_device *cdev);
+#else /* !CONFIG_CPU_THERMAL */
+static inline struct thermal_cooling_device *cpufreq_cooling_register(
+	const struct cpumask *clip_cpus)
+{
+	return NULL;
+}
+static inline void cpufreq_cooling_unregister(
+		struct thermal_cooling_device *cdev)
+{
+	return;
+}
+#endif	/* CONFIG_CPU_THERMAL */
 
 #endif /* __CPU_COOLING_H__ */

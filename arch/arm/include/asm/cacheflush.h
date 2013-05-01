@@ -16,7 +16,6 @@
 #include <asm/shmparam.h>
 #include <asm/cachetype.h>
 #include <asm/outercache.h>
-#include <mach/smc.h>
 
 #define CACHE_COLOUR(vaddr)	((vaddr & (SHMLBA - 1)) >> PAGE_SHIFT)
 
@@ -49,6 +48,13 @@
  *	flush_kern_all()
  *
  *		Unconditionally clean and invalidate the entire cache.
+ *
+ *     flush_kern_louis()
+ *
+ *             Flush data cache levels up to the level of unification
+ *             inner shareable and invalidate the I-cache.
+ *             Only needed from v7 onwards, falls back to flush_cache_all()
+ *             for all other processor versions.
  *
  *	flush_user_all()
  *
@@ -98,11 +104,12 @@
 struct cpu_cache_fns {
 	void (*flush_icache_all)(void);
 	void (*flush_kern_all)(void);
+	void (*flush_kern_louis)(void);
 	void (*flush_user_all)(void);
 	void (*flush_user_range)(unsigned long, unsigned long, unsigned int);
 
 	void (*coherent_kern_range)(unsigned long, unsigned long);
-	void (*coherent_user_range)(unsigned long, unsigned long);
+	int  (*coherent_user_range)(unsigned long, unsigned long);
 	void (*flush_kern_dcache_area)(void *, size_t);
 
 	void (*dma_map_area)(const void *, size_t, int);
@@ -120,6 +127,7 @@ extern struct cpu_cache_fns cpu_cache;
 
 #define __cpuc_flush_icache_all		cpu_cache.flush_icache_all
 #define __cpuc_flush_kern_all		cpu_cache.flush_kern_all
+#define __cpuc_flush_kern_louis		cpu_cache.flush_kern_louis
 #define __cpuc_flush_user_all		cpu_cache.flush_user_all
 #define __cpuc_flush_user_range		cpu_cache.flush_user_range
 #define __cpuc_coherent_kern_range	cpu_cache.coherent_kern_range
@@ -140,10 +148,11 @@ extern struct cpu_cache_fns cpu_cache;
 
 extern void __cpuc_flush_icache_all(void);
 extern void __cpuc_flush_kern_all(void);
+extern void __cpuc_flush_kern_louis(void);
 extern void __cpuc_flush_user_all(void);
 extern void __cpuc_flush_user_range(unsigned long, unsigned long, unsigned int);
 extern void __cpuc_coherent_kern_range(unsigned long, unsigned long);
-extern void __cpuc_coherent_user_range(unsigned long, unsigned long);
+extern int  __cpuc_coherent_user_range(unsigned long, unsigned long);
 extern void __cpuc_flush_dcache_area(void *, size_t);
 
 /*
@@ -205,13 +214,12 @@ static inline void __flush_icache_all(void)
 	__flush_icache_preferred();
 }
 
-#define flush_cache_all()		__cpuc_flush_kern_all()
+/*
+ * Flush caches up to Level of Unification Inner Shareable
+ */
+#define flush_cache_louis()		__cpuc_flush_kern_louis()
 
-#ifndef CONFIG_SMP
-#define flush_all_cpu_caches()		flush_cache_all()
-#else
-extern void flush_all_cpu_caches(void);
-#endif
+#define flush_cache_all()		__cpuc_flush_kern_all()
 
 static inline void vivt_flush_cache_mm(struct mm_struct *mm)
 {
@@ -222,7 +230,9 @@ static inline void vivt_flush_cache_mm(struct mm_struct *mm)
 static inline void
 vivt_flush_cache_range(struct vm_area_struct *vma, unsigned long start, unsigned long end)
 {
-	if (cpumask_test_cpu(smp_processor_id(), mm_cpumask(vma->vm_mm)))
+	struct mm_struct *mm = vma->vm_mm;
+
+	if (!mm || cpumask_test_cpu(smp_processor_id(), mm_cpumask(mm)))
 		__cpuc_flush_user_range(start & PAGE_MASK, PAGE_ALIGN(end),
 					vma->vm_flags);
 }
@@ -230,7 +240,9 @@ vivt_flush_cache_range(struct vm_area_struct *vma, unsigned long start, unsigned
 static inline void
 vivt_flush_cache_page(struct vm_area_struct *vma, unsigned long user_addr, unsigned long pfn)
 {
-	if (cpumask_test_cpu(smp_processor_id(), mm_cpumask(vma->vm_mm))) {
+	struct mm_struct *mm = vma->vm_mm;
+
+	if (!mm || cpumask_test_cpu(smp_processor_id(), mm_cpumask(mm))) {
 		unsigned long addr = user_addr & PAGE_MASK;
 		__cpuc_flush_user_range(addr, addr + PAGE_SIZE, vma->vm_flags);
 	}
@@ -351,37 +363,4 @@ static inline void flush_cache_vunmap(unsigned long start, unsigned long end)
 		flush_cache_all();
 }
 
-/*
- * Control the full line of zero function that must be enabled
- * only when the slaves connected on cortex-A9 AXI master port support it.
- * The L2-310 cache controller supports this feature.
- */
-#ifdef CONFIG_CACHE_L2X0
-static inline void __enable_cache_foz(int enable)
-{
-	int val;
-
-	asm volatile(
-	"mrc p15, 0, %0, c1, c0, 1\n"
-	: "=r" (val));
-
-	/* enable/disable Foz */
-	if (enable)
-		val |= ((1<<3));
-	else
-		val &= (~(1<<3));
-
-#ifdef CONFIG_ARM_TRUSTZONE
-	exynos_smc(SMC_CMD_REG, SMC_REG_ID_CP15(1, 0, 0, 1), val, 0);
-#else
-	asm volatile("mcr p15, 0, %0, c1, c0, 1" : : "r" (val));
-#endif
-}
-
-#define enable_cache_foz()	__enable_cache_foz(1)
-#define disable_cache_foz()	__enable_cache_foz(0)
-#else
-#define enable_cache_foz()	do { } while (0)
-#define disable_cache_foz()	do { } while (0)
-#endif
 #endif

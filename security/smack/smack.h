@@ -43,7 +43,6 @@ struct superblock_smack {
 	char		*smk_hat;
 	char		*smk_default;
 	int		smk_initialized;
-	spinlock_t	smk_sblock;	/* for initialization */
 };
 
 struct socket_smack {
@@ -181,6 +180,15 @@ struct smack_known {
  */
 #define SMK_NUM_ACCESS_TYPE 5
 
+/* SMACK data */
+struct smack_audit_data {
+	const char *function;
+	char *subject;
+	char *object;
+	char *request;
+	int result;
+};
+
 /*
  * Smack audit data; is empty if CONFIG_AUDIT not set
  * to save some stack
@@ -188,6 +196,7 @@ struct smack_known {
 struct smk_audit_info {
 #ifdef CONFIG_AUDIT
 	struct common_audit_data a;
+	struct smack_audit_data sad;
 #endif
 };
 /*
@@ -307,9 +316,18 @@ void smack_log(char *subject_label, char *object_label,
 static inline void smk_ad_init(struct smk_audit_info *a, const char *func,
 			       char type)
 {
-	memset(a, 0, sizeof(*a));
+	memset(&a->sad, 0, sizeof(a->sad));
 	a->a.type = type;
-	a->a.smack_audit_data.function = func;
+	a->a.smack_audit_data = &a->sad;
+	a->a.smack_audit_data->function = func;
+}
+
+static inline void smk_ad_init_net(struct smk_audit_info *a, const char *func,
+				   char type, struct lsm_network_audit *net)
+{
+	smk_ad_init(a, func, type);
+	memset(net, 0, sizeof(*net));
+	a->a.u.net = net;
 }
 
 static inline void smk_ad_setfield_u_tsk(struct smk_audit_info *a,
@@ -335,7 +353,7 @@ static inline void smk_ad_setfield_u_fs_path(struct smk_audit_info *a,
 static inline void smk_ad_setfield_u_net_sk(struct smk_audit_info *a,
 					    struct sock *sk)
 {
-	a->a.u.net.sk = sk;
+	a->a.u.net->sk = sk;
 }
 
 #else /* no AUDIT */

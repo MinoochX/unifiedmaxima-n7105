@@ -50,7 +50,6 @@ enum smk_inos {
 	SMK_ACCESS2	= 16,	/* make an access check with long labels */
 	SMK_CIPSO2	= 17,	/* load long label -> CIPSO mapping */
 	SMK_REVOKE_SUBJ	= 18,	/* set rules with subject label to '-' */
-	SMK_CHANGE_RULE	= 19,	/* change or add rules (long labels) */
 };
 
 /*
@@ -211,74 +210,33 @@ static int smk_set_access(struct smack_rule *srp, struct list_head *rule_list,
 }
 
 /**
- * smk_perm_from_str - parse smack accesses from a text string
- * @string: a text string that contains a Smack accesses code
- *
- * Returns an integer with respective bits set for specified accesses.
- */
-static int smk_perm_from_str(const char *string)
-{
-	int perm = 0;
-	const char *cp;
-
-	for (cp = string; ; cp++)
-		switch (*cp) {
-		case '-':
-			break;
-		case 'r':
-		case 'R':
-			perm |= MAY_READ;
-			break;
-		case 'w':
-		case 'W':
-			perm |= MAY_WRITE;
-			break;
-		case 'x':
-		case 'X':
-			perm |= MAY_EXEC;
-			break;
-		case 'a':
-		case 'A':
-			perm |= MAY_APPEND;
-			break;
-		case 't':
-		case 'T':
-			perm |= MAY_TRANSMUTE;
-			break;
-		default:
-			return perm;
-		}
-}
-
-/**
  * smk_fill_rule - Fill Smack rule from strings
  * @subject: subject label string
  * @object: object label string
  * @access: access string
- * @access_remove: string with permissions to be removed
  * @rule: Smack rule
  * @import: if non-zero, import labels
+ * @len: label length limit
  *
  * Returns 0 on success, -1 on failure
  */
 static int smk_fill_rule(const char *subject, const char *object,
-				const char *access, const char *access_remove,
-				struct smack_rule *rule, int import)
+				const char *access, struct smack_rule *rule,
+				int import, int len)
 {
-	int rc = -1;
 	const char *cp;
 	struct smack_known *skp;
 
 	if (import) {
-		rule->smk_subject = smk_import(subject, 0);
+		rule->smk_subject = smk_import(subject, len);
 		if (rule->smk_subject == NULL)
 			return -1;
 
-		rule->smk_object = smk_import(object, 0);
+		rule->smk_object = smk_import(object, len);
 		if (rule->smk_object == NULL)
 			return -1;
 	} else {
-		cp = smk_parse_smack(subject, 0);
+		cp = smk_parse_smack(subject, len);
 		if (cp == NULL)
 			return -1;
 		skp = smk_find_entry(cp);
@@ -287,7 +245,7 @@ static int smk_fill_rule(const char *subject, const char *object,
 			return -1;
 		rule->smk_subject = skp->smk_known;
 
-		cp = smk_parse_smack(object, 0);
+		cp = smk_parse_smack(object, len);
 		if (cp == NULL)
 			return -1;
 		skp = smk_find_entry(cp);
@@ -297,15 +255,38 @@ static int smk_fill_rule(const char *subject, const char *object,
 		rule->smk_object = skp->smk_known;
 	}
 
-	if (access_remove) {
-		rule->smk_access |= smk_perm_from_str(access);
-		rule->smk_access &= ~smk_perm_from_str(access_remove);
-	} else
-		rule->smk_access = smk_perm_from_str(access);
+	rule->smk_access = 0;
 
-	rc = 0;
+	for (cp = access; *cp != '\0'; cp++) {
+		switch (*cp) {
+		case '-':
+			break;
+		case 'r':
+		case 'R':
+			rule->smk_access |= MAY_READ;
+			break;
+		case 'w':
+		case 'W':
+			rule->smk_access |= MAY_WRITE;
+			break;
+		case 'x':
+		case 'X':
+			rule->smk_access |= MAY_EXEC;
+			break;
+		case 'a':
+		case 'A':
+			rule->smk_access |= MAY_APPEND;
+			break;
+		case 't':
+		case 'T':
+			rule->smk_access |= MAY_TRANSMUTE;
+			break;
+		default:
+			return 0;
+		}
+	}
 
-	return rc;
+	return 0;
 }
 
 /**
@@ -321,8 +302,8 @@ static int smk_parse_rule(const char *data, struct smack_rule *rule, int import)
 	int rc;
 
 	rc = smk_fill_rule(data, data + SMK_LABELLEN,
-			   data + SMK_LABELLEN + SMK_LABELLEN, NULL, rule,
-			   import);
+			   data + SMK_LABELLEN + SMK_LABELLEN, rule, import,
+			   SMK_LABELLEN);
 	return rc;
 }
 
@@ -331,25 +312,23 @@ static int smk_parse_rule(const char *data, struct smack_rule *rule, int import)
  * @data: string to be parsed, null terminated
  * @rule: Smack rule
  * @import: if non-zero, import labels
- * @change: if non-zero, data is from /smack/change-rule
  *
  * Returns 0 on success, -1 on failure
  */
 static int smk_parse_long_rule(const char *data, struct smack_rule *rule,
-				int import, int change)
+				int import)
 {
 	char *subject;
 	char *object;
 	char *access;
-	char *access_remove;
 	int datalen;
 	int rc = -1;
 
-	/*
-	 * This is probably inefficient, but safe.
-	 */
+	/* This is inefficient */
 	datalen = strlen(data);
-	subject = kzalloc(datalen, GFP_KERNEL);
+
+	/* Our first element can be 64 + \0 with no spaces */
+	subject = kzalloc(datalen + 1, GFP_KERNEL);
 	if (subject == NULL)
 		return -1;
 	object = kzalloc(datalen, GFP_KERNEL);
@@ -358,23 +337,10 @@ static int smk_parse_long_rule(const char *data, struct smack_rule *rule,
 	access = kzalloc(datalen, GFP_KERNEL);
 	if (access == NULL)
 		goto free_out_o;
-	access_remove = kzalloc(datalen, GFP_KERNEL);
-	if (access_remove == NULL)
-		goto free_out_a;
 
-	if (change) {
-		if (sscanf(data, "%s %s %s %s",
-			subject, object, access, access_remove) == 4)
-			rc = smk_fill_rule(subject, object, access,
-				access_remove, rule, import);
-	} else {
-		if (sscanf(data, "%s %s %s", subject, object, access) == 3)
-			rc = smk_fill_rule(subject, object, access,
-				NULL, rule, import);
-	}
+	if (sscanf(data, "%s %s %s", subject, object, access) == 3)
+		rc = smk_fill_rule(subject, object, access, rule, import, 0);
 
-	kfree(access_remove);
-free_out_a:
 	kfree(access);
 free_out_o:
 	kfree(object);
@@ -385,7 +351,6 @@ free_out_s:
 
 #define SMK_FIXED24_FMT	0	/* Fixed 24byte label format */
 #define SMK_LONG_FMT	1	/* Variable long label format */
-#define SMK_CHANGE_FMT	2	/* Rule modification format */
 /**
  * smk_write_rules_list - write() for any /smack rule file
  * @file: file pointer, not actually used
@@ -394,16 +359,13 @@ free_out_s:
  * @ppos: where to start - must be 0
  * @rule_list: the list of rules to write to
  * @rule_lock: lock for the rule list
- * @format: /smack/load or /smack/load2 or /smack/change-rule format.
+ * @format: /smack/load or /smack/load2 format.
  *
  * Get one smack access rule from above.
  * The format for SMK_LONG_FMT is:
  *	"subject<whitespace>object<whitespace>access[<whitespace>...]"
  * The format for SMK_FIXED24_FMT is exactly:
  *	"subject                 object                  rwxat"
- * The format for SMK_CHANGE_FMT is:
- *	"subject<whitespace>object<whitespace>
- *	 acc_enable<whitespace>acc_disable[<whitespace>...]"
  */
 static ssize_t smk_write_rules_list(struct file *file, const char __user *buf,
 					size_t count, loff_t *ppos,
@@ -455,11 +417,7 @@ static ssize_t smk_write_rules_list(struct file *file, const char __user *buf,
 		 * Be sure the data string is terminated.
 		 */
 		data[count] = '\0';
-		if (smk_parse_long_rule(data, rule, 1, 0))
-			goto out_free_rule;
-	} else if (format == SMK_CHANGE_FMT) {
-		data[count] = '\0';
-		if (smk_parse_long_rule(data, rule, 1, 1))
+		if (smk_parse_long_rule(data, rule, 1))
 			goto out_free_rule;
 	} else {
 		/*
@@ -1838,7 +1796,7 @@ static ssize_t smk_user_access(struct file *file, const char __user *buf,
 			return -ENOMEM;
 		memcpy(cod, data, count);
 		cod[count] = '\0';
-		res = smk_parse_long_rule(cod, &rule, 0, 0);
+		res = smk_parse_long_rule(cod, &rule, 0);
 		kfree(cod);
 	}
 
@@ -2105,32 +2063,18 @@ static const struct file_operations smk_revoke_subj_ops = {
 	.llseek		= generic_file_llseek,
 };
 
+static struct kset *smackfs_kset;
 /**
- * smk_write_change_rule - write() for /smack/change-rule
- * @file: file pointer
- * @buf: data from user space
- * @count: bytes sent
- * @ppos: where to start - must be 0
+ * smk_init_sysfs - initialize /sys/fs/smackfs
+ *
  */
-static ssize_t smk_write_change_rule(struct file *file, const char __user *buf,
-				size_t count, loff_t *ppos)
+static int smk_init_sysfs(void)
 {
-	/*
-	 * Must have privilege.
-	 */
-	if (!capable(CAP_MAC_ADMIN))
-		return -EPERM;
-
-	return smk_write_rules_list(file, buf, count, ppos, NULL, NULL,
-				    SMK_CHANGE_FMT);
+	smackfs_kset = kset_create_and_add("smackfs", NULL, fs_kobj);
+	if (!smackfs_kset)
+		return -ENOMEM;
+	return 0;
 }
-
-static const struct file_operations smk_change_rule_ops = {
-	.write		= smk_write_change_rule,
-	.read		= simple_transaction_read,
-	.release	= simple_transaction_release,
-	.llseek		= generic_file_llseek,
-};
 
 /**
  * smk_fill_super - fill the /smackfs superblock
@@ -2181,8 +2125,6 @@ static int smk_fill_super(struct super_block *sb, void *data, int silent)
 		[SMK_REVOKE_SUBJ] = {
 			"revoke-subject", &smk_revoke_subj_ops,
 			S_IRUGO|S_IWUSR},
-		[SMK_CHANGE_RULE] = {
-			"change-rule", &smk_change_rule_ops, S_IRUGO|S_IWUSR},
 		/* last one */
 			{""}
 	};
@@ -2195,7 +2137,6 @@ static int smk_fill_super(struct super_block *sb, void *data, int silent)
 	}
 
 	root_inode = sb->s_root->d_inode;
-	root_inode->i_security = new_inode_smack(smack_known_floor.smk_known);
 
 	return 0;
 }
@@ -2254,6 +2195,10 @@ static int __init init_smk_fs(void)
 
 	if (!security_module_enable(&smack_ops))
 		return 0;
+
+	err = smk_init_sysfs();
+	if (err)
+		printk(KERN_ERR "smackfs: sysfs mountpoint problem.\n");
 
 	err = register_filesystem(&smk_fs_type);
 	if (!err) {

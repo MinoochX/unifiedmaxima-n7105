@@ -14,35 +14,12 @@
 #include <linux/dma-mapping.h>
 
 #include <plat/cpu.h>
-#include <plat/pd.h>
-#include <plat/devs.h>
 
 #include <mach/map.h>
 #include <mach/irqs.h>
 #include <mach/sysmmu.h>
 
 static u64 exynos_sysmmu_dma_mask = DMA_BIT_MASK(32);
-
-/* DEFINE_RES_XXXX is defined in 3.3 kernel */
-#ifndef DEFINE_RES_NAMED
-#define DEFINE_RES_NAMED(_start, _size, _name, _flags)			\
-	{								\
-		.start = (_start),					\
-		.end = (_start) + (_size) - 1,				\
-		.name = (_name),					\
-		.flags = (_flags),					\
-	}
-
-#define DEFINE_RES_MEM_NAMED(_start, _size, _name)			\
-	DEFINE_RES_NAMED((_start), (_size), (_name), IORESOURCE_MEM)
-#define DEFINE_RES_MEM(_start, _size)					\
-	DEFINE_RES_MEM_NAMED((_start), (_size), NULL)
-
-#define DEFINE_RES_IRQ_NAMED(_irq, _name)				\
-	DEFINE_RES_NAMED((_irq), 1, (_name), IORESOURCE_IRQ)
-#define DEFINE_RES_IRQ(_irq)						\
-	DEFINE_RES_IRQ_NAMED((_irq), NULL)
-#endif /* DEFINE_RES_NAMED */
 
 #define SYSMMU_PLATFORM_DEVICE(ipname, devid)				\
 static struct sysmmu_platform_data platdata_##ipname = {		\
@@ -59,7 +36,8 @@ struct platform_device SYSMMU_PLATDEV(ipname) =				\
 	},								\
 }
 
-SYSMMU_PLATFORM_DEVICE(mfc_lr,	0);
+SYSMMU_PLATFORM_DEVICE(mfc_l,	0);
+SYSMMU_PLATFORM_DEVICE(mfc_r,	1);
 SYSMMU_PLATFORM_DEVICE(tv,	2);
 SYSMMU_PLATFORM_DEVICE(jpeg,	3);
 SYSMMU_PLATFORM_DEVICE(rot,	4);
@@ -76,8 +54,7 @@ SYSMMU_PLATFORM_DEVICE(fimd0,	10);
 SYSMMU_PLATFORM_DEVICE(fimd1,	11);
 SYSMMU_PLATFORM_DEVICE(camif0,	12);
 SYSMMU_PLATFORM_DEVICE(camif1,	13);
-SYSMMU_PLATFORM_DEVICE(camif2,	14);
-SYSMMU_PLATFORM_DEVICE(2d,	15);
+SYSMMU_PLATFORM_DEVICE(2d,	14);
 
 #define SYSMMU_RESOURCE_NAME(core, ipname) sysmmures_##core##_##ipname
 
@@ -118,7 +95,7 @@ struct sysmmu_resource_map {
 #ifdef CONFIG_EXYNOS_DEV_PD
 #define SYSMMU_RESOURCE_MAPPING_PD(core, ipname, resname, pd) {		\
 	.pdev = &SYSMMU_PLATDEV(ipname),				\
-	.res = SYSMMU_RESOURCE_NAME(EXYNOS##core, resname),		\
+	.res = &SYSMMU_RESOURCE_NAME(EXYNOS##core, resname),		\
 	.rnum = ARRAY_SIZE(SYSMMU_RESOURCE_NAME(EXYNOS##core, resname)),\
 	.clocknames = SYSMMU_CLOCK_NAME,				\
 	.pdd = &exynos##core##_device_pd[pd].dev,			\
@@ -126,7 +103,7 @@ struct sysmmu_resource_map {
 
 #define SYSMMU_RESOURCE_MAPPING_MCPD(core, ipname, resname, pd, pdata) {\
 	.pdev = &SYSMMU_PLATDEV(ipname),				\
-	.res = SYSMMU_RESOURCE_NAME(EXYNOS##core, resname),		\
+	.res = &SYSMMU_RESOURCE_NAME(EXYNOS##core, resname),		\
 	.rnum = ARRAY_SIZE(SYSMMU_RESOURCE_NAME(EXYNOS##core, resname)),\
 	.clocknames = SYSMMU_CLOCK_NAME "," SYSMMU_CLOCK_NAME2,		\
 	.pdd = &exynos##core##_device_pd[pd].dev,			\
@@ -147,20 +124,18 @@ SYSMMU_RESOURCE_DEFINE(EXYNOS4, fimc3,	FIMC3,	FIMC3);
 SYSMMU_RESOURCE_DEFINE(EXYNOS4, jpeg,	JPEG,	JPEG);
 SYSMMU_RESOURCE_DEFINE(EXYNOS4, 2d,	G2D,	2D);
 SYSMMU_RESOURCE_DEFINE(EXYNOS4, tv,	TV,	TV_M0);
-SYSMMU_RESOURCE_DEFINE(EXYNOS4, 2d_acp,	G2D_ACP, 2D);
+SYSMMU_RESOURCE_DEFINE(EXYNOS4, 2d_acp,	2D_ACP,	2D);
 SYSMMU_RESOURCE_DEFINE(EXYNOS4, rot,	ROTATOR, ROTATOR);
 SYSMMU_RESOURCE_DEFINE(EXYNOS4, fimd0,	FIMD0,	LCD0_M0);
 SYSMMU_RESOURCE_DEFINE(EXYNOS4, fimd1,	FIMD1,	LCD1_M1);
 SYSMMU_RESOURCE_DEFINE(EXYNOS4, flite0,	FIMC_LITE0, FIMC_LITE0);
 SYSMMU_RESOURCE_DEFINE(EXYNOS4, flite1,	FIMC_LITE1, FIMC_LITE1);
-SYSMMU_RESOURCE(EXYNOS4, mfc_lr) {
-	DEFINE_SYSMMU_RESOURCE(EXYNOS4, MFC_R, MFC_M0),
-	DEFINE_SYSMMU_RESOURCE(EXYNOS4, MFC_L, MFC_M1),
-};
+SYSMMU_RESOURCE_DEFINE(EXYNOS4, mfc_r,	MFC_R,	MFC_M0);
+SYSMMU_RESOURCE_DEFINE(EXYNOS4, mfc_l,	MFC_L,	MFC_M1);
 SYSMMU_RESOURCE(EXYNOS4, isp) {
-	DEFINE_SYSMMU_RESOURCE(EXYNOS4, ISP, FIMC_ISP),
-	DEFINE_SYSMMU_RESOURCE(EXYNOS4, DRC, FIMC_DRC),
-	DEFINE_SYSMMU_RESOURCE(EXYNOS4, FD, FIMC_FD),
+	DEFINE_SYSMMU_RESOURCE(EXYNOS4, FIMC_ISP, FIMC_ISP),
+	DEFINE_SYSMMU_RESOURCE(EXYNOS4, FIMC_DRC, FIMC_DRC),
+	DEFINE_SYSMMU_RESOURCE(EXYNOS4, FIMC_FD, FIMC_FD),
 	DEFINE_SYSMMU_RESOURCE(EXYNOS4, ISPCPU, FIMC_CX),
 };
 
@@ -170,7 +145,8 @@ static struct sysmmu_resource_map sysmmu_resmap4[] __initdata = {
 	SYSMMU_RESOURCE_MAPPING_PD(4, fimc2,	fimc2,	PD_CAM),
 	SYSMMU_RESOURCE_MAPPING_PD(4, fimc3,	fimc3,	PD_CAM),
 	SYSMMU_RESOURCE_MAPPING_PD(4, tv,	tv,	PD_TV),
-	SYSMMU_RESOURCE_MAPPING_PD(4, mfc_lr,	mfc_lr,	PD_MFC),
+	SYSMMU_RESOURCE_MAPPING_PD(4, mfc_r,	mfc_r,	PD_MFC),
+	SYSMMU_RESOURCE_MAPPING_PD(4, mfc_l,	mfc_l,	PD_MFC),
 	SYSMMU_RESOURCE_MAPPING_PD(4, rot,	rot,	PD_LCD0),
 	SYSMMU_RESOURCE_MAPPING_PD(4, jpeg,	jpeg,	PD_CAM),
 	SYSMMU_RESOURCE_MAPPING_PD(4, fimd0,	fimd0,	PD_LCD0),
@@ -197,15 +173,12 @@ SYSMMU_RESOURCE_DEFINE(EXYNOS5, rot,	ROTATOR, ROTATOR);
 SYSMMU_RESOURCE_DEFINE(EXYNOS5, tv,	TV,	TV);
 SYSMMU_RESOURCE_DEFINE(EXYNOS5, flite0,	LITE0,	LITE0);
 SYSMMU_RESOURCE_DEFINE(EXYNOS5, flite1,	LITE1,	LITE1);
-SYSMMU_RESOURCE_DEFINE(EXYNOS5, flite2,	LITE2,	LITE2);
 SYSMMU_RESOURCE_DEFINE(EXYNOS5, gsc0,	GSC0,	GSC0);
 SYSMMU_RESOURCE_DEFINE(EXYNOS5, gsc1,	GSC1,	GSC1);
 SYSMMU_RESOURCE_DEFINE(EXYNOS5, gsc2,	GSC2,	GSC2);
 SYSMMU_RESOURCE_DEFINE(EXYNOS5, gsc3,	GSC3,	GSC3);
-SYSMMU_RESOURCE(EXYNOS5, mfc_lr) {
-	DEFINE_SYSMMU_RESOURCE(EXYNOS5, MFC_R, MFC_R),
-	DEFINE_SYSMMU_RESOURCE(EXYNOS5, MFC_L, MFC_L),
-};
+SYSMMU_RESOURCE_DEFINE(EXYNOS5, mfc_r,	MFC_R,	MFC_R);
+SYSMMU_RESOURCE_DEFINE(EXYNOS5, mfc_l,	MFC_L,	MFC_L);
 SYSMMU_RESOURCE(EXYNOS5, isp) {
 	DEFINE_SYSMMU_RESOURCE(EXYNOS5, ISP, ISP),
 	DEFINE_SYSMMU_RESOURCE(EXYNOS5, DRC, DRC),
@@ -227,12 +200,12 @@ static struct sysmmu_resource_map sysmmu_resmap5[] __initdata = {
 	SYSMMU_RESOURCE_MAPPING_PD(5,	tv,	tv,	PD_DISP1),
 	SYSMMU_RESOURCE_MAPPING_PD(5,	camif0,	flite0,	PD_GSCL),
 	SYSMMU_RESOURCE_MAPPING_PD(5,	camif1,	flite1,	PD_GSCL),
-	SYSMMU_RESOURCE_MAPPING_PD(5,	camif2,	flite2,	PD_GSCL),
 	SYSMMU_RESOURCE_MAPPING_PD(5,	gsc0,	gsc0,	PD_GSCL),
 	SYSMMU_RESOURCE_MAPPING_PD(5,	gsc1,	gsc1,	PD_GSCL),
 	SYSMMU_RESOURCE_MAPPING_PD(5,	gsc2,	gsc2,	PD_GSCL),
 	SYSMMU_RESOURCE_MAPPING_PD(5,	gsc3,	gsc3,	PD_GSCL),
-	SYSMMU_RESOURCE_MAPPING_PD(5,	mfc_lr,	mfc_lr,	PD_MFC),
+	SYSMMU_RESOURCE_MAPPING_PD(5,	mfc_r,	mfc_r,	PD_MFC),
+	SYSMMU_RESOURCE_MAPPING_PD(5,	mfc_l,	mfc_l,	PD_MFC),
 	SYSMMU_RESOURCE_MAPPING_MCPD(5,	isp,	isp,	PD_ISP, mc_platdata),
 };
 #endif /* CONFIG_ARCH_EXYNOS5 */
@@ -298,4 +271,4 @@ static int __init init_sysmmu_platform_device(void)
 
 	return 0;
 }
-subsys_initcall(init_sysmmu_platform_device);
+arch_initcall(init_sysmmu_platform_device);

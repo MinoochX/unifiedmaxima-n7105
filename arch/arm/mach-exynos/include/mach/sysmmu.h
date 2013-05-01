@@ -29,7 +29,8 @@ struct platform_device;
 
 #define SYSMMU_PLATDEV(ipname) exynos_device_sysmmu_##ipname
 
-extern struct platform_device SYSMMU_PLATDEV(mfc_lr);
+extern struct platform_device SYSMMU_PLATDEV(mfc_l);
+extern struct platform_device SYSMMU_PLATDEV(mfc_r);
 extern struct platform_device SYSMMU_PLATDEV(tv);
 extern struct platform_device SYSMMU_PLATDEV(jpeg);
 extern struct platform_device SYSMMU_PLATDEV(rot);
@@ -46,7 +47,6 @@ extern struct platform_device SYSMMU_PLATDEV(fimd0);
 extern struct platform_device SYSMMU_PLATDEV(fimd1);
 extern struct platform_device SYSMMU_PLATDEV(camif0);
 extern struct platform_device SYSMMU_PLATDEV(camif1);
-extern struct platform_device SYSMMU_PLATDEV(camif2);
 extern struct platform_device SYSMMU_PLATDEV(2d);
 
 #ifdef CONFIG_IOMMU_API
@@ -55,12 +55,10 @@ static inline void platform_set_sysmmu(
 {
 	dev->archdata.iommu = sysmmu;
 }
-#else
-#define platform_set_sysmmu(dev, sysmmu) do { } while (0)
 #endif
 
 #else /* !CONFIG_EXYNOS_DEV_SYSMMU */
-#define platform_set_sysmmu(dev, sysmmu) do { } while (0)
+#define platform_set_sysmmu(sysmmu, dev) do { } while (0)
 #endif
 
 #define SYSMMU_CLOCK_DEVNAME(ipname, id) (SYSMMU_DEVNAME_BASE "." #id)

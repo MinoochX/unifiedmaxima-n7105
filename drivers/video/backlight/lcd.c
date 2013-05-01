@@ -5,6 +5,8 @@
  *
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/device.h>
@@ -14,10 +16,6 @@
 #include <linux/err.h>
 #include <linux/fb.h>
 #include <linux/slab.h>
-
-#ifdef CONFIG_DRM
-#include <drm/drm_backlight.h>
-#endif
 
 #if defined(CONFIG_FB) || (defined(CONFIG_FB_MODULE) && \
 			   defined(CONFIG_LCD_CLASS_DEVICE_MODULE))
@@ -110,20 +108,19 @@ static ssize_t lcd_show_power(struct device *dev, struct device_attribute *attr,
 static ssize_t lcd_store_power(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
-	int rc = -ENXIO;
-	char *endp;
+	int rc;
 	struct lcd_device *ld = to_lcd_device(dev);
-	int power = simple_strtoul(buf, &endp, 0);
-	size_t size = endp - buf;
+	unsigned long power;
 
-	if (isspace(*endp))
-		size++;
-	if (size != count)
-		return -EINVAL;
+	rc = kstrtoul(buf, 0, &power);
+	if (rc)
+		return rc;
+
+	rc = -ENXIO;
 
 	mutex_lock(&ld->ops_lock);
 	if (ld->ops && ld->ops->set_power) {
-		pr_debug("lcd: set power to %d\n", power);
+		pr_debug("set power to %lu\n", power);
 		ld->ops->set_power(ld, power);
 		rc = count;
 	}
@@ -149,20 +146,19 @@ static ssize_t lcd_show_contrast(struct device *dev,
 static ssize_t lcd_store_contrast(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
-	int rc = -ENXIO;
-	char *endp;
+	int rc;
 	struct lcd_device *ld = to_lcd_device(dev);
-	int contrast = simple_strtoul(buf, &endp, 0);
-	size_t size = endp - buf;
+	unsigned long contrast;
 
-	if (isspace(*endp))
-		size++;
-	if (size != count)
-		return -EINVAL;
+	rc = kstrtoul(buf, 0, &contrast);
+	if (rc)
+		return rc;
+
+	rc = -ENXIO;
 
 	mutex_lock(&ld->ops_lock);
 	if (ld->ops && ld->ops->set_contrast) {
-		pr_debug("lcd: set contrast to %d\n", contrast);
+		pr_debug("set contrast to %lu\n", contrast);
 		ld->ops->set_contrast(ld, contrast);
 		rc = count;
 	}
@@ -240,10 +236,6 @@ struct lcd_device *lcd_device_register(const char *name, struct device *parent,
 
 	new_ld->ops = ops;
 
-#ifdef CONFIG_DRM
-	drm_bl_register(&new_ld->dev, BL_LCD_CLASS);
-#endif
-
 	return new_ld;
 }
 EXPORT_SYMBOL(lcd_device_register);
@@ -258,10 +250,6 @@ void lcd_device_unregister(struct lcd_device *ld)
 {
 	if (!ld)
 		return;
-
-#ifdef CONFIG_DRM
-	drm_bl_unregister(&ld->dev);
-#endif
 
 	mutex_lock(&ld->ops_lock);
 	ld->ops = NULL;
@@ -281,8 +269,8 @@ static int __init lcd_class_init(void)
 {
 	lcd_class = class_create(THIS_MODULE, "lcd");
 	if (IS_ERR(lcd_class)) {
-		printk(KERN_WARNING "Unable to create backlight class; errno = %ld\n",
-				PTR_ERR(lcd_class));
+		pr_warn("Unable to create backlight class; errno = %ld\n",
+			PTR_ERR(lcd_class));
 		return PTR_ERR(lcd_class);
 	}
 

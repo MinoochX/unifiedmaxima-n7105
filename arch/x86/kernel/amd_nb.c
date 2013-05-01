@@ -2,6 +2,9 @@
  * Shared support code for AMD K8 northbridges and derivates.
  * Copyright 2006 Andi Kleen, SUSE Labs. Subject to GPLv2.
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/init.h>
@@ -16,6 +19,7 @@ const struct pci_device_id amd_nb_misc_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_K8_NB_MISC) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_10H_NB_MISC) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_15H_NB_F3) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_15H_M10H_F3) },
 	{}
 };
 EXPORT_SYMBOL(amd_nb_misc_ids);
@@ -154,16 +158,14 @@ int amd_get_subcaches(int cpu)
 {
 	struct pci_dev *link = node_to_amd_nb(amd_get_nb_id(cpu))->link;
 	unsigned int mask;
-	int cuid = 0;
+	int cuid;
 
 	if (!amd_nb_has_feature(AMD_NB_L3_PARTITIONING))
 		return 0;
 
 	pci_read_config_dword(link, 0x1d4, &mask);
 
-#ifdef CONFIG_SMP
 	cuid = cpu_data(cpu).compute_unit_id;
-#endif
 	return (mask >> (4 * cuid)) & 0xf;
 }
 
@@ -172,7 +174,7 @@ int amd_set_subcaches(int cpu, int mask)
 	static unsigned int reset, ban;
 	struct amd_northbridge *nb = node_to_amd_nb(amd_get_nb_id(cpu));
 	unsigned int reg;
-	int cuid = 0;
+	int cuid;
 
 	if (!amd_nb_has_feature(AMD_NB_L3_PARTITIONING) || mask > 0xf)
 		return -EINVAL;
@@ -190,9 +192,7 @@ int amd_set_subcaches(int cpu, int mask)
 		pci_write_config_dword(nb->misc, 0x1b8, reg & ~0x180000);
 	}
 
-#ifdef CONFIG_SMP
 	cuid = cpu_data(cpu).compute_unit_id;
-#endif
 	mask <<= 4 * cuid;
 	mask |= (0xf ^ (1 << cuid)) << 26;
 
@@ -262,7 +262,7 @@ void amd_flush_garts(void)
 	}
 	spin_unlock_irqrestore(&gart_lock, flags);
 	if (!flushed)
-		printk("nothing to flush?\n");
+		pr_notice("nothing to flush?\n");
 }
 EXPORT_SYMBOL_GPL(amd_flush_garts);
 
@@ -273,11 +273,10 @@ static __init int init_amd_nbs(void)
 	err = amd_cache_northbridges();
 
 	if (err < 0)
-		printk(KERN_NOTICE "AMD NB: Cannot enumerate AMD northbridges.\n");
+		pr_notice("Cannot enumerate AMD northbridges\n");
 
 	if (amd_cache_gart() < 0)
-		printk(KERN_NOTICE "AMD NB: Cannot initialize GART flush words, "
-		       "GART support disabled.\n");
+		pr_notice("Cannot initialize GART flush words, GART support disabled\n");
 
 	return err;
 }

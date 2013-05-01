@@ -9,25 +9,18 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 /* #define VERBOSE_DEBUG */
 
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/gfp.h>
 #include <linux/device.h>
 #include <linux/ctype.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
+#include <linux/if_vlan.h>
 
 #include "u_ether.h"
 
@@ -92,16 +85,9 @@ struct eth_dev {
 
 #define DEFAULT_QLEN	2	/* double buffering by default */
 
-
-#ifdef CONFIG_USB_GADGET_DUALSPEED
-
 static unsigned qmult = 5;
 module_param(qmult, uint, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(qmult, "queue length multiplier at high/super speed");
-
-#else	/* full speed (low speed doesn't do bulk) */
-#define qmult		1
-#endif
 
 /* for dual-speed hardware, use deeper queues at high/super speed */
 static inline int qlen(struct usb_gadget *gadget)
@@ -243,11 +229,8 @@ rx_submit(struct eth_dev *dev, struct usb_request *req, gfp_t gfp_flags)
 
 	if (dev->port_usb->is_fixed)
 		size = max_t(size_t, size, dev->port_usb->fixed_out_len);
-#ifdef CONFIG_USB_S3C_OTGD
-	skb = alloc_skb(size + NET_IP_ALIGN + 6, gfp_flags);
-#else
+
 	skb = alloc_skb(size + NET_IP_ALIGN, gfp_flags);
-#endif
 	if (skb == NULL) {
 		DBG(dev, "no rx skb\n");
 		goto enomem;
@@ -257,11 +240,8 @@ rx_submit(struct eth_dev *dev, struct usb_request *req, gfp_t gfp_flags)
 	 * but on at least one, checksumming fails otherwise.  Note:
 	 * RNDIS headers involve variable numbers of LE32 values.
 	 */
-#ifdef CONFIG_USB_S3C_OTGD
-	skb_reserve(skb, NET_IP_ALIGN + 6);
-#else
 	skb_reserve(skb, NET_IP_ALIGN);
-#endif
+
 	req->buf = skb->data;
 	req->length = size;
 	req->complete = rx_complete;
@@ -316,7 +296,7 @@ static void rx_complete(struct usb_ep *ep, struct usb_request *req)
 		while (skb2) {
 			if (status < 0
 					|| ETH_HLEN > skb2->len
-					|| skb2->len > ETH_FRAME_LEN) {
+					|| skb2->len > VLAN_ETH_FRAME_LEN) {
 				dev->net->stats.rx_errors++;
 				dev->net->stats.rx_length_errors++;
 				DBG(dev, "rx length %d\n", skb2->len);
@@ -489,11 +469,6 @@ static void tx_complete(struct usb_ep *ep, struct usb_request *req)
 	spin_lock(&dev->req_lock);
 	list_add(&req->list, &dev->tx_reqs);
 	spin_unlock(&dev->req_lock);
-
-#ifdef CONFIG_USB_S3C_OTGD
-	if (req->buf != skb->data)
-		kfree(req->buf);
-#endif
 	dev_kfree_skb_any(skb);
 
 	atomic_dec(&dev->tx_qlen);
@@ -589,19 +564,7 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 
 		length = skb->len;
 	}
-#ifdef CONFIG_USB_S3C_OTGD
-	/* for double word align  */
-	req->buf = kmalloc(skb->len, GFP_ATOMIC | GFP_DMA);
-
-	if (!req->buf) {
-		req->buf = skb->data;
-		ERROR(dev, "fail to kmalloc[req->buf = skb->data]\n");
-	} else {
-		memcpy((void *)req->buf, (void *)skb->data, skb->len);
-	}
-#else
 	req->buf = skb->data;
-#endif
 	req->context = skb;
 	req->complete = tx_complete;
 
@@ -640,14 +603,9 @@ static netdev_tx_t eth_start_xmit(struct sk_buff *skb,
 	}
 
 	if (retval) {
-#ifdef CONFIG_USB_S3C_OTGD
-		if (req->buf != skb->data)
-			kfree(req->buf);
-#endif
 		dev_kfree_skb_any(skb);
 drop:
 		dev->net->stats.tx_dropped++;
-
 		spin_lock_irqsave(&dev->req_lock, flags);
 		if (list_empty(&dev->tx_reqs))
 			netif_start_queue(net);
@@ -661,7 +619,8 @@ drop:
 
 static void eth_start(struct eth_dev *dev, gfp_t gfp_flags)
 {
-	printk(KERN_DEBUG "usb: %s ++\n", __func__);
+	DBG(dev, "%s\n", __func__);
+
 	/* fill the rx queue */
 	rx_fill(dev, gfp_flags);
 
@@ -675,7 +634,7 @@ static int eth_open(struct net_device *net)
 	struct eth_dev	*dev = netdev_priv(net);
 	struct gether	*link;
 
-	printk(KERN_DEBUG "usb: %s ++\n", __func__);
+	DBG(dev, "%s\n", __func__);
 	if (netif_carrier_ok(dev->net))
 		eth_start(dev, GFP_KERNEL);
 
@@ -705,6 +664,8 @@ static int eth_stop(struct net_device *net)
 	spin_lock_irqsave(&dev->lock, flags);
 	if (dev->port_usb) {
 		struct gether	*link = dev->port_usb;
+		const struct usb_endpoint_descriptor *in;
+		const struct usb_endpoint_descriptor *out;
 
 		if (link->close)
 			link->close(link);
@@ -718,12 +679,16 @@ static int eth_stop(struct net_device *net)
 		 * their own pace; the network stack can handle old packets.
 		 * For the moment we leave this here, since it works.
 		 */
+		in = link->in_ep->desc;
+		out = link->out_ep->desc;
 		usb_ep_disable(link->in_ep);
 		usb_ep_disable(link->out_ep);
 		if (netif_carrier_ok(net)) {
 			DBG(dev, "host still using in/out endpoints\n");
-			usb_ep_enable(link->in_ep, link->in);
-			usb_ep_enable(link->out_ep, link->out);
+			link->in_ep->desc = in;
+			link->out_ep->desc = out;
+			usb_ep_enable(link->in_ep);
+			usb_ep_enable(link->out_ep);
 		}
 	}
 	spin_unlock_irqrestore(&dev->lock, flags);
@@ -760,7 +725,7 @@ static int get_ether_addr(const char *str, u8 *dev_addr)
 		if (is_valid_ether_addr(dev_addr))
 			return 0;
 	}
-	random_ether_addr(dev_addr);
+	eth_random_addr(dev_addr);
 	return 1;
 }
 
@@ -778,24 +743,6 @@ static const struct net_device_ops eth_netdev_ops = {
 static struct device_type gadget_type = {
 	.name	= "gadget",
 };
-
-/**
- * gether_setup - initialize one ethernet-over-usb link
- * @g: gadget to associated with these links
- * @ethaddr: NULL, or a buffer in which the ethernet address of the
- *	host side of the link is recorded
- * Context: may sleep
- *
- * This sets up the single network link that may be exported by a
- * gadget driver using this framework.  The link layer addresses are
- * set up using module parameters.
- *
- * Returns negative errno, or zero on success
- */
-int gether_setup(struct usb_gadget *g, u8 ethaddr[ETH_ALEN])
-{
-	return gether_setup_name(g, ethaddr, "usb");
-}
 
 /**
  * gether_setup_name - initialize one ethernet-over-usb link
@@ -841,28 +788,16 @@ int gether_setup_name(struct usb_gadget *g, u8 ethaddr[ETH_ALEN],
 	if (get_ether_addr(dev_addr, net->dev_addr))
 		dev_warn(&g->dev,
 			"using random %s ethernet address\n", "self");
-
-#ifdef CONFIG_USB_ANDROID_SAMSUNG_COMPOSITE
-	memcpy(dev->host_mac, ethaddr, ETH_ALEN);
-	printk(KERN_DEBUG "usb: set unique host mac\n");
-#else
 	if (get_ether_addr(host_addr, dev->host_mac))
 		dev_warn(&g->dev,
 			"using random %s ethernet address\n", "host");
 
 	if (ethaddr)
 		memcpy(ethaddr, dev->host_mac, ETH_ALEN);
-#endif
 
 	net->netdev_ops = &eth_netdev_ops;
 
 	SET_ETHTOOL_OPS(net, &ops);
-
-	/* two kinds of host-initiated state changes:
-	 *  - iff DATA transfer is active, carrier is "on"
-	 *  - tx queueing enabled if open *and* carrier is "on"
-	 */
-	netif_carrier_off(net);
 
 	dev->gadget = g;
 	SET_NETDEV_DEV(net, &g->dev);
@@ -877,6 +812,12 @@ int gether_setup_name(struct usb_gadget *g, u8 ethaddr[ETH_ALEN],
 		INFO(dev, "HOST MAC %pM\n", dev->host_mac);
 
 		the_dev = dev;
+
+		/* two kinds of host-initiated state changes:
+		 *  - iff DATA transfer is active, carrier is "on"
+		 *  - tx queueing enabled if open *and* carrier is "on"
+		 */
+		netif_carrier_off(net);
 	}
 
 	return status;
@@ -894,7 +835,7 @@ void gether_cleanup(void)
 		return;
 
 	unregister_netdev(the_dev->net);
-	flush_work_sync(&the_dev->work);
+	flush_work(&the_dev->work);
 	free_netdev(the_dev->net);
 
 	the_dev = NULL;
@@ -922,12 +863,11 @@ struct net_device *gether_connect(struct gether *link)
 	struct eth_dev		*dev = the_dev;
 	int			result = 0;
 
-	printk(KERN_DEBUG "usb: %s ++\n", __func__);
 	if (!dev)
 		return ERR_PTR(-EINVAL);
 
 	link->in_ep->driver_data = dev;
-	result = usb_ep_enable(link->in_ep, link->in);
+	result = usb_ep_enable(link->in_ep);
 	if (result != 0) {
 		DBG(dev, "enable %s --> %d\n",
 			link->in_ep->name, result);
@@ -935,22 +875,19 @@ struct net_device *gether_connect(struct gether *link)
 	}
 
 	link->out_ep->driver_data = dev;
-	result = usb_ep_enable(link->out_ep, link->out);
+	result = usb_ep_enable(link->out_ep);
 	if (result != 0) {
 		DBG(dev, "enable %s --> %d\n",
 			link->out_ep->name, result);
 		goto fail1;
 	}
 
-	printk(KERN_DEBUG "usb: %s enable ep in/out\n", __func__);
 	if (result == 0)
 		result = alloc_requests(dev, link, qlen(dev->gadget));
 
 	if (result == 0) {
 		dev->zlp = link->is_zlp_ok;
 		DBG(dev, "qlen %d\n", qlen(dev->gadget));
-		printk(KERN_DEBUG "usb: %s qlen=%d\n",
-				__func__, qlen(dev->gadget));
 
 		dev->header_len = link->header_len;
 		dev->unwrap = link->unwrap;
@@ -968,12 +905,9 @@ struct net_device *gether_connect(struct gether *link)
 		}
 		spin_unlock(&dev->lock);
 
-		printk(KERN_DEBUG "usb: %s netif_carrier_on\n", __func__);
 		netif_carrier_on(dev->net);
-		if (netif_running(dev->net)) {
-			printk(KERN_DEBUG "usb: %s eth_start\n", __func__);
+		if (netif_running(dev->net))
 			eth_start(dev, GFP_ATOMIC);
-		}
 
 	/* on error, disable any endpoints  */
 	} else {
@@ -1005,6 +939,7 @@ void gether_disconnect(struct gether *link)
 	struct eth_dev		*dev = link->ioport;
 	struct usb_request	*req;
 
+	WARN_ON(!dev);
 	if (!dev)
 		return;
 
@@ -1030,7 +965,7 @@ void gether_disconnect(struct gether *link)
 	}
 	spin_unlock(&dev->req_lock);
 	link->in_ep->driver_data = NULL;
-	link->in = NULL;
+	link->in_ep->desc = NULL;
 
 	usb_ep_disable(link->out_ep);
 	spin_lock(&dev->req_lock);
@@ -1045,7 +980,7 @@ void gether_disconnect(struct gether *link)
 	}
 	spin_unlock(&dev->req_lock);
 	link->out_ep->driver_data = NULL;
-	link->out = NULL;
+	link->out_ep->desc = NULL;
 
 	/* finish forgetting about this USB link episode */
 	dev->header_len = 0;
