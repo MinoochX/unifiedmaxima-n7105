@@ -1,6 +1,10 @@
 	Linux kernel release 3.x <http://kernel.org/>
 
-	UnifiedMaxima Test Release Revision 3 [1-5-2013]
+	UnifiedMaxima Test Release Revision 4 [2-5-2013]
+
+News:
+
+[2-5-2013] UMX will now follow revision by per commit (1 commit = up 1 revision)
 
 These are the release notes for Linux version 3.  Read them carefully,
 as they tell you what this is all about, explain how to install the
